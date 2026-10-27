@@ -99,6 +99,14 @@ public actor IMAPServer {
         capabilities.contains(.move)
     }
 
+    /// Whether the primary connection advertised Gmail's IMAP extensions (`X-GM-EXT-1`).
+    ///
+    /// Gate ``uidSearchGmailRaw(_:)`` and ``fetchGmailAttributes(for:)`` on it; other
+    /// servers reject both.
+    public var supportsGmailExtensions: Bool {
+        capabilities.contains(.gmailExtensions)
+    }
+
     var certificatePolicyForTesting: MailCertificateVerificationPolicy {
         primaryConnection.certificateVerificationPolicyForTesting
     }

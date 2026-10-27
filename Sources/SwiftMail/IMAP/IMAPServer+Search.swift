@@ -22,6 +22,7 @@ extension IMAPServer {
      - Parameters:
      - identifierSet: Optional set of message identifiers to search within. If nil, searches all messages.
      - criteria: The search criteria to apply. Multiple criteria are combined with AND logic.
+     - charset: Optional `CHARSET` sent with SEARCH, e.g. `"UTF-8"` for non-ASCII terms. `nil` sends none.
      - Returns: A set of message identifiers matching all the search criteria
      - Throws:
      - `IMAPError.searchFailed` if the search operation fails
@@ -36,7 +37,8 @@ extension IMAPServer {
     public func search<T: MessageIdentifier>(
         identifierSet: MessageIdentifierSet<T>? = nil,
         criteria: [SearchCriteria],
-        calendar: Calendar = Calendar(identifier: .gregorian)
+        calendar: Calendar = Calendar(identifier: .gregorian),
+        charset: String? = nil
     ) async throws -> MessageIdentifierSet<T> {
         if criteria.contains(where: { $0.requiresWithin }) && !capabilities.contains(.within) {
             throw IMAPError.commandNotSupported(
@@ -46,25 +48,31 @@ extension IMAPServer {
         let command = SearchCommand(
             identifierSet: identifierSet,
             criteria: criteria,
-            calendar: calendar
+            calendar: calendar,
+            charset: charset
         )
         return try await executeCommand(command)
     }
 
     /// Search the selected mailbox and preserve server sort order.
+    ///
+    /// `charset` is sent as `CHARSET <name>` with SEARCH (e.g. `"UTF-8"` for non-ASCII terms);
+    /// `nil` sends none. When SORT is used, `sortCharset` applies instead.
     public func search<T: MessageIdentifier>(
         identifierSet: MessageIdentifierSet<T>? = nil,
         criteria: [SearchCriteria],
         sortCriteria: [SortCriterion],
         sortCharset: String = "UTF-8",
-        calendar: Calendar = Calendar(identifier: .gregorian)
+        calendar: Calendar = Calendar(identifier: .gregorian),
+        charset: String? = nil
     ) async throws -> [T] {
         let result = try await extendedSearch(
             identifierSet: identifierSet,
             criteria: criteria,
             sortCriteria: sortCriteria,
             sortCharset: sortCharset,
-            calendar: calendar
+            calendar: calendar,
+            charset: charset
         )
 
         if let ordered = result.ordered {
@@ -97,6 +105,8 @@ extension IMAPServer {
          is available, `PARTIAL` is requested instead of `ALL`, and results appear in
          ``ExtendedSearchResult/partial`` rather than ``ExtendedSearchResult/all``. Ignored when the
          server does not advertise ESEARCH.
+       - charset: Optional `CHARSET` sent with SEARCH, e.g. `"UTF-8"` for non-ASCII terms. `nil` sends
+         none. When SORT is used, `sortCharset` applies instead.
      - Returns: An ``ExtendedSearchResult`` containing COUNT, MIN, MAX and either ALL or PARTIAL when available.
      - Throws:
        - `IMAPError.commandFailed` if the search operation fails
@@ -108,7 +118,8 @@ extension IMAPServer {
         sortCriteria: [SortCriterion] = [],
         sortCharset: String = "UTF-8",
         calendar: Calendar = Calendar(identifier: .gregorian),
-        partialRange: PartialRange? = nil
+        partialRange: PartialRange? = nil,
+        charset: String? = nil
     ) async throws -> ExtendedSearchResult<T> {
         if criteria.contains(where: { $0.requiresWithin }) && !capabilities.contains(.within) {
             throw IMAPError.commandNotSupported(
@@ -131,7 +142,8 @@ extension IMAPServer {
             calendar: calendar,
             useSort: useSort,
             useEsearch: useEsearch,
-            partialRange: partialRange
+            partialRange: partialRange,
+            charset: charset
         )
         return try await executeCommand(command)
     }

@@ -22,4 +22,30 @@ extension IMAPServer {
         }
         return result
     }
+
+    /// Searches the selected mailbox with Gmail's own search syntax (`X-GM-RAW`) and returns
+    /// the matching UIDs in ascending order.
+    ///
+    /// Sends `UID SEARCH CHARSET UTF-8 X-GM-RAW <raw>`, with `raw` encoded as one IMAP string
+    /// (a quoted string, or a UTF-8 literal for non-ASCII input), and reuses the SEARCH
+    /// response handling of ``search(identifierSet:criteria:sortCriteria:sortCharset:calendar:charset:)``.
+    ///
+    /// Read-only: it issues no SELECT or EXAMINE of its own and stores nothing. Select or
+    /// examine the mailbox to search first.
+    ///
+    /// - Parameter raw: The query as typed into Gmail's search box, e.g. `has:attachment from:alice`.
+    /// - Returns: The matching UIDs, ascending.
+    /// - Throws:
+    ///   - `IMAPError.commandNotSupported` when the server did not advertise `X-GM-EXT-1`;
+    ///     nothing is sent in that case.
+    ///   - `IMAPError.invalidArgument` for an empty query.
+    ///   - `IMAPError.commandFailed` when the server answers NO or BAD.
+    public func uidSearchGmailRaw(_ raw: String) async throws -> [UID] {
+        guard supportsGmailExtensions else {
+            throw IMAPError.commandNotSupported("X-GM-RAW search requires the X-GM-EXT-1 capability")
+        }
+        let command = GmailRawSearchCommand(rawQuery: raw)
+        let result = try await executeCommand(command)
+        return result.toArray()
+    }
 }

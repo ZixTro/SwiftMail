@@ -28,6 +28,9 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
     let useSort: Bool
     /// Calendar used for date-to-day conversions in search criteria.
     let calendar: Calendar
+    /// Charset sent as `CHARSET <name>` on SEARCH/UID SEARCH; `nil` sends none.
+    /// SORT always carries ``sortCharset`` instead.
+    let charset: String?
 
     /// Timeout in seconds for the search operation.
     var timeoutSeconds: Int { return 60 }
@@ -38,6 +41,7 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
        - identifierSet: Optional set limiting the messages to search.
        - criteria: The search criteria to apply.
        - calendar: The calendar used for date-to-day conversions. Defaults to the Gregorian calendar.
+       - charset: Optional `CHARSET` for SEARCH (e.g. `"UTF-8"` for non-ASCII terms).
      */
     init(
         identifierSet: MessageIdentifierSet<T>? = nil,
@@ -45,7 +49,8 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
         sortCriteria: [SortCriterion] = [],
         sortCharset: String = "UTF-8",
         useSort: Bool = false,
-        calendar: Calendar = Calendar(identifier: .gregorian)
+        calendar: Calendar = Calendar(identifier: .gregorian),
+        charset: String? = nil
     ) {
         self.identifierSet = identifierSet
         self.criteria = criteria
@@ -53,6 +58,7 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
         self.sortCharset = sortCharset
         self.useSort = useSort
         self.calendar = calendar
+        self.charset = charset
     }
 
     /// Validate that the command has at least one criterion.
@@ -63,6 +69,7 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
         guard !useSort || !sortCriteria.isEmpty else {
             throw IMAPError.invalidArgument("Sort criteria cannot be empty when SORT is enabled")
         }
+        try SearchCharset.validate(charset)
         for criterion in criteria { try criterion.validate() }
     }
 
@@ -98,9 +105,23 @@ struct SearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable {
                 )
             }
         } else if T.self == UID.self {
-            return TaggedCommand(tag: tag, command: .uidSearch(key: key))
+            return TaggedCommand(tag: tag, command: .uidSearch(key: key, charset: charset))
         } else {
-            return TaggedCommand(tag: tag, command: .search(key: key))
+            return TaggedCommand(tag: tag, command: .search(key: key, charset: charset))
+        }
+    }
+}
+
+/// Validation for the `CHARSET` argument of SEARCH.
+///
+/// NIOIMAP writes the charset verbatim (`CHARSET <name> `), so anything other than a plain
+/// atom would let a caller inject protocol syntax.
+enum SearchCharset {
+    static func validate(_ charset: String?) throws {
+        guard let charset else { return }
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.:")
+        guard !charset.isEmpty, charset.count <= 64, charset.allSatisfy({ allowed.contains($0) }) else {
+            throw IMAPError.invalidArgument("Search charset must be a plain charset name such as UTF-8")
         }
     }
 }

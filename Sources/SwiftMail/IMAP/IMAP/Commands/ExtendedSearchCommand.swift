@@ -30,6 +30,9 @@ struct ExtendedSearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable 
     /// Optional window for paged (PARTIAL) results. Only used when `useEsearch` is true.
     /// When non-nil, `PARTIAL` is requested instead of `ALL`.
     let partialRange: NIOIMAPCore.PartialRange?
+    /// Charset sent as `CHARSET <name>` on SEARCH/UID SEARCH; `nil` sends none.
+    /// SORT always carries ``sortCharset`` instead.
+    let charset: String?
 
     var timeoutSeconds: Int { return 60 }
 
@@ -41,7 +44,8 @@ struct ExtendedSearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable 
         calendar: Calendar = Calendar(identifier: .gregorian),
         useSort: Bool = false,
         useEsearch: Bool,
-        partialRange: NIOIMAPCore.PartialRange? = nil
+        partialRange: NIOIMAPCore.PartialRange? = nil,
+        charset: String? = nil
     ) {
         self.identifierSet = identifierSet
         self.criteria = criteria
@@ -51,6 +55,7 @@ struct ExtendedSearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable 
         self.useSort = useSort
         self.useEsearch = useEsearch
         self.partialRange = partialRange
+        self.charset = charset
     }
 
     func validate() throws {
@@ -60,6 +65,7 @@ struct ExtendedSearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable 
         guard !useSort || !sortCriteria.isEmpty else {
             throw IMAPError.invalidArgument("Sort criteria cannot be empty when SORT is enabled")
         }
+        try SearchCharset.validate(charset)
         for criterion in criteria { try criterion.validate() }
     }
 
@@ -107,9 +113,15 @@ struct ExtendedSearchCommand<T: MessageIdentifier>: IMAPTaggedCommand, Sendable 
                 )
             }
         } else if T.self == UID.self {
-            return TaggedCommand(tag: tag, command: .uidSearch(key: key, returnOptions: returnOptions))
+            return TaggedCommand(
+                tag: tag,
+                command: .uidSearch(key: key, charset: charset, returnOptions: returnOptions)
+            )
         } else {
-            return TaggedCommand(tag: tag, command: .search(key: key, returnOptions: returnOptions))
+            return TaggedCommand(
+                tag: tag,
+                command: .search(key: key, charset: charset, returnOptions: returnOptions)
+            )
         }
     }
 }
