@@ -14,8 +14,11 @@ struct SendContentCommand: SMTPCommand {
     /// The fully constructed MIME message content to send (as raw bytes)
     private let contentData: Data
 
-    /// Default timeout in seconds
-    let timeoutSeconds: Int = 10
+    /// How long to wait for the server's reply after the final "." (and for the body upload
+    /// before it). The server may scan, sign or relay the whole message before it answers, so
+    /// this is far longer than the other command waits. RFC 5321 §4.5.3.2.6 recommends
+    /// 10 minutes; 5 minutes is the common client choice.
+    let timeoutSeconds: Int = 300
 
     /**
      Initialize a new SendContent command with raw data
