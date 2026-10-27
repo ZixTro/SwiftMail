@@ -31,7 +31,13 @@ extension SMTPServer {
             transportSecurity: transportSecurity
         )
 
-        let bootstrap = makeClientBootstrap(useImplicitTLS: transportMode == .implicitTLS)
+        // The greeting handler goes into the pipeline with the other handlers, before the
+        // TCP connection completes; a server may greet the instant it accepts.
+        let greetingHandlers = SMTPGreetingHandlers()
+        let bootstrap = makeClientBootstrap(
+            useImplicitTLS: transportMode == .implicitTLS,
+            greetingHandlers: greetingHandlers
+        )
 
         // Connect to the server
         let channel = try await bootstrap.connect(host: host, port: port).get()
@@ -39,8 +45,12 @@ extension SMTPServer {
         // Store the channel
         self.channel = channel
 
-        // Wait for the server greeting using our generic handler execution pattern
-        let greeting = try await executeHandlerOnly(handlerType: SMTPGreetingHandler.self)
+        await afterConnectHookForTesting?()
+
+        guard let greetingHandler = greetingHandlers.handler(for: channel) else {
+            throw SMTPError.connectionFailed("SMTP greeting handler missing for the connected channel")
+        }
+        let greeting = try await awaitGreeting(from: greetingHandler, on: channel)
 
         // Check if the greeting is positive
         guard greeting.code >= 200 && greeting.code < 300 else {
@@ -59,7 +69,10 @@ extension SMTPServer {
     }
 
     /// Build the NIO `ClientBootstrap` used by ``connect()``, optionally configured for implicit TLS.
-    private func makeClientBootstrap(useImplicitTLS: Bool) -> ClientBootstrap {
+    private func makeClientBootstrap(
+        useImplicitTLS: Bool,
+        greetingHandlers: SMTPGreetingHandlers
+    ) -> ClientBootstrap {
         let host = self.host
         let certificateVerificationPolicy = self.certificateVerificationPolicy
         let minimumTLSVersion = self.minimumTLSVersion
@@ -86,7 +99,8 @@ extension SMTPServer {
                         try channel.pipeline.syncOperations.addHandlers([
                             ByteToMessageHandler(SMTPLineBasedFrameDecoder()),
                             duplexLogger,
-                            SMTPResponseHandler()
+                            SMTPResponseHandler(),
+                            greetingHandlers.makeHandler(for: channel)
                         ])
 
                         return channel.eventLoop.makeSucceededFuture(())
@@ -99,7 +113,8 @@ extension SMTPServer {
                         try channel.pipeline.syncOperations.addHandlers([
                             ByteToMessageHandler(SMTPLineBasedFrameDecoder()),
                             duplexLogger,
-                            SMTPResponseHandler()
+                            SMTPResponseHandler(),
+                            greetingHandlers.makeHandler(for: channel)
                         ])
                     } catch {
                         return channel.eventLoop.makeFailedFuture(error)
@@ -198,6 +213,10 @@ extension SMTPServer {
 
     func replaceChannelForTesting(_ channel: Channel?) {
         self.channel = channel
+    }
+
+    func setAfterConnectHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        afterConnectHookForTesting = hook
     }
 
     func closeAndClearChannelAfterSTARTTLSPolicyFailure() async {

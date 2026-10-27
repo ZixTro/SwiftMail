@@ -85,6 +85,9 @@ public actor SMTPServer {
     /** Server capabilities reported by EHLO command */
     var capabilities: [String] = []
 
+    /// Test seam: runs between the TCP connect and the greeting wait in ``connect()``.
+    var afterConnectHookForTesting: (@Sendable () async -> Void)?
+
     /// Whether the server advertised the `8BITMIME` extension in the most recent EHLO response.
     public var supports8BitMIME: Bool {
         capabilities.contains("8BITMIME")
@@ -319,6 +322,38 @@ public actor SMTPServer {
 
             throw error
         }
+    }
+
+    /**
+     Wait for the server greeting captured by `handler`, then take the handler out of the pipeline.
+
+     The handler was installed before the TCP connection completed, so a greeting that arrived
+     early is already held by its promise. Times out like the rest of the greeting wait.
+     */
+    func awaitGreeting(
+        from handler: SMTPGreetingHandler,
+        on channel: Channel,
+        timeoutSeconds: Int = 5
+    ) async throws -> SMTPGreeting {
+        let promise = handler.promise
+        let result: Result<SMTPGreeting, Error>
+        do {
+            let greeting = try await withTimeout(seconds: Double(timeoutSeconds), operation: {
+                try await promise.futureResult.get()
+            }, onTimeout: {
+                promise.fail(SMTPError.connectionFailed("Response timeout"))
+                throw SMTPError.connectionFailed("Response timeout")
+            })
+            result = .success(greeting)
+        } catch {
+            promise.fail(error)
+            result = .failure(error)
+        }
+
+        duplexLogger.flushInboundBuffer()
+        // Command handlers are appended after it, so it must be gone before EHLO goes out.
+        try? await channel.pipeline.removeHandler(handler).get()
+        return try result.get()
     }
 
     /**
