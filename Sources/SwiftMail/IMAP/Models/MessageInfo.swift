@@ -50,6 +50,13 @@ public struct MessageInfo: Codable, Sendable {
     /// Additional header fields
     public var additionalFields: [String: String]?
 
+    /// The header section exactly as the server sent it: every line in its original order, folding
+    /// intact, and repeated fields (such as several `Authentication-Results` lines) kept apart.
+    /// This is the `BODY[HEADER]` or `BODY[HEADER.FIELDS (...)]` literal of the fetch, and is `nil`
+    /// when the fetch carried no header section. Unlike ``additionalFields``, nothing is merged
+    /// or lowercased.
+    public var rawHeaderFields: String?
+
     /// The total size of the message in bytes, from `RFC822.SIZE`. Only populated when the fetch
     /// request asks for it.
     public var size: Int?
@@ -71,6 +78,7 @@ public struct MessageInfo: Codable, Sendable {
         case parts
         case additionalFields
         case size
+        case rawHeaderFields
     }
 
     /// Initialize a new email header
@@ -88,6 +96,7 @@ public struct MessageInfo: Codable, Sendable {
     ///   - parts: The message parts
     ///   - additionalFields: Additional header fields
     ///   - size: The total size of the message in bytes (RFC822.SIZE)
+    ///   - rawHeaderFields: The header section exactly as received
     public init(
         sequenceNumber: SequenceNumber,
         uid: SwiftMail.UID? = nil,
@@ -104,7 +113,8 @@ public struct MessageInfo: Codable, Sendable {
         flags: [Flag] = [],
         parts: [MessagePart] = [],
         additionalFields: [String: String]? = nil,
-        size: Int? = nil
+        size: Int? = nil,
+        rawHeaderFields: String? = nil
     ) {
         self.sequenceNumber = sequenceNumber
         self.uid = uid
@@ -122,6 +132,7 @@ public struct MessageInfo: Codable, Sendable {
         self.parts = parts
         self.additionalFields = additionalFields
         self.size = size
+        self.rawHeaderFields = rawHeaderFields
     }
 }
 
@@ -145,7 +156,8 @@ public extension MessageInfo {
             flags: try container.decodeIfPresent([Flag].self, forKey: .flags) ?? [],
             parts: try container.decodeIfPresent([MessagePart].self, forKey: .parts) ?? [],
             additionalFields: try container.decodeIfPresent([String: String].self, forKey: .additionalFields),
-            size: try container.decodeIfPresent(Int.self, forKey: .size)
+            size: try container.decodeIfPresent(Int.self, forKey: .size),
+            rawHeaderFields: try container.decodeIfPresent(String.self, forKey: .rawHeaderFields)
         )
     }
 

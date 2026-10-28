@@ -227,6 +227,122 @@ struct FetchMessageInfoHandlerTests {
         #expect(infos[0].references == [MessageID("<root@example.com>")!, MessageID("<child@example.com>")!])
     }
 
+    @Test
+    func testRawHeaderFieldsKeepsRepeatedAuthenticationResultsLinesInOrder() async throws {
+        // The trusted receiver prepends its Authentication-Results line, so the topmost one is the
+        // trustworthy one. A forged line from the sender sits lower. The collapsed `additionalFields`
+        // dictionary keeps only one of them, so the literal has to come through untouched.
+        let literal = "Authentication-Results: mx.google.com;\r\n"
+            + "\tdkim=pass (2048-bit key) header.d=firma.sk;\r\n"
+            + " \tspf=pass smtp.mailfrom=firma.sk\r\n"
+            + "Received-SPF: pass (google.com: domain of bounce@firma.sk  designates 203.0.113.7)\r\n"
+            + "Authentication-Results: relay.evil.example;\r\n"
+            + "\tdmarc=pass header.from=paypal.com \r\n"
+            + "ARC-Authentication-Results: i=1; mx.google.com; dmarc=pass header.from=firma.sk\r\n"
+            + "\r\n"
+
+        let infos = try await executeFetch(
+            [
+                fetchResponse(
+                    sequenceNumber: 1,
+                    envelope: envelopeAttribute(messageId: "<msg@example.com>"),
+                    headerFields: ["Authentication-Results", "ARC-Authentication-Results", "Received-SPF"],
+                    headerBlock: literal
+                ),
+                "A001 OK FETCH completed\r\n"
+            ]
+        )
+
+        #expect(infos.count == 1)
+        let raw = try #require(infos[0].rawHeaderFields)
+        #expect(Array(raw.utf8) == Array(literal.utf8))
+        let trusted = try #require(raw.range(of: "mx.google.com;\r\n\tdkim=pass"))
+        let forged = try #require(raw.range(of: "relay.evil.example;"))
+        #expect(trusted.lowerBound < forged.lowerBound)
+        #expect(raw.components(separatedBy: "Authentication-Results:").count - 1 == 3)
+    }
+
+    @Test
+    func testRawHeaderFieldsIsSetForFullHeaderFetchToo() async throws {
+        let headerBlock = "Subject: Hello\r\nX-Test: value\r\nX-Test: second\r\n\r\n"
+
+        let infos = try await executeFetch(
+            [
+                fetchResponse(
+                    sequenceNumber: 1,
+                    envelope: envelopeAttribute(messageId: "<msg@example.com>"),
+                    headerBlock: headerBlock
+                ),
+                "A001 OK FETCH completed\r\n"
+            ]
+        )
+
+        #expect(infos.count == 1)
+        #expect(infos[0].rawHeaderFields.map { Array($0.utf8) } == Array(headerBlock.utf8))
+    }
+
+    @Test
+    func testRawHeaderFieldsIsNilWithoutAHeaderLiteral() async throws {
+        let infos = try await executeFetch(
+            [
+                "* 1 FETCH (UID 7 FLAGS (\\Seen) ENVELOPE \(envelopeAttribute(messageId: "<msg@example.com>")))\r\n",
+                "A001 OK FETCH completed\r\n"
+            ]
+        )
+
+        #expect(infos.count == 1)
+        #expect(infos[0].uid == UID(7))
+        #expect(infos[0].rawHeaderFields == nil)
+    }
+
+    @Test
+    func testRawHeaderFieldsStayWithTheirOwnMessageInABulkFetch() async throws {
+        let firstLiteral = "Authentication-Results: mx.google.com; spf=pass\r\n\r\n"
+        let thirdLiteral = "Authentication-Results: mx.example.net; dkim=fail\r\n\r\n"
+
+        let infos = try await executeFetch(
+            [
+                fetchResponse(
+                    sequenceNumber: 1,
+                    envelope: envelopeAttribute(messageId: "<a@example.com>"),
+                    headerFields: ["Authentication-Results"],
+                    headerBlock: firstLiteral
+                ),
+                "* 2 FETCH (UID 8 ENVELOPE \(envelopeAttribute(messageId: "<b@example.com>")))\r\n",
+                fetchResponse(
+                    sequenceNumber: 3,
+                    envelope: envelopeAttribute(messageId: "<c@example.com>"),
+                    headerFields: ["Authentication-Results"],
+                    headerBlock: thirdLiteral
+                ),
+                "A001 OK FETCH completed\r\n"
+            ]
+        )
+
+        #expect(infos.count == 3)
+        #expect(infos[0].rawHeaderFields == firstLiteral)
+        #expect(infos[1].rawHeaderFields == nil)
+        #expect(infos[2].rawHeaderFields == thirdLiteral)
+    }
+
+    @Test
+    func testRawHeaderFieldsSurvivesHeaderBytesThatAreNotUTF8() async throws {
+        // Some senders put raw Latin-1 in a header. The parsed dictionaries are skipped for such a
+        // block (as before), but the raw lines must still reach the caller, authentication included.
+        var bytes = Array("* 1 FETCH (ENVELOPE \(envelopeAttribute(messageId: "<msg@example.com>"))".utf8)
+        let literal: [UInt8] = Array("Authentication-Results: mx.google.com; spf=pass\r\nSubject: caf".utf8)
+            + [0xE9] + Array("\r\n\r\n".utf8)
+        bytes += Array(" BODY[HEADER.FIELDS (Authentication-Results Subject)] {\(literal.count)}\r\n".utf8)
+        bytes += literal + Array(")\r\n".utf8)
+
+        let infos = try await executeFetch(bytes: [bytes, Array("A001 OK FETCH completed\r\n".utf8)])
+
+        #expect(infos.count == 1)
+        let raw = try #require(infos[0].rawHeaderFields)
+        #expect(raw.hasPrefix("Authentication-Results: mx.google.com; spf=pass\r\n"))
+        #expect(raw.contains("Subject: caf"))
+    }
+
     /// Build a `Date` from explicit Y/M/D + H/M/S components, anchored to UTC.
     /// Folded into a single `DateComponents` parameter so the helper signature
     /// stays under the 6-parameter swiftlint limit while keeping call sites
@@ -238,6 +354,10 @@ struct FetchMessageInfoHandlerTests {
     }
 
     private func executeFetch(_ rawResponses: [String]) async throws -> [MessageInfo] {
+        try await executeFetch(bytes: rawResponses.map { Array($0.utf8) })
+    }
+
+    private func executeFetch(bytes rawResponses: [[UInt8]]) async throws -> [MessageInfo] {
         let channel = try await NIOAsyncTestingChannel.withIMAPClientHandler()
 
         let promise = channel.eventLoop.makePromise(of: [MessageInfo].self)
@@ -249,8 +369,8 @@ struct FetchMessageInfoHandlerTests {
         _ = try await channel.readOutbound(as: ByteBuffer.self)
 
         for rawResponse in rawResponses {
-            var buffer = channel.allocator.buffer(capacity: rawResponse.utf8.count)
-            buffer.writeString(rawResponse)
+            var buffer = channel.allocator.buffer(capacity: rawResponse.count)
+            buffer.writeBytes(rawResponse)
             try await channel.writeInbound(buffer)
         }
 

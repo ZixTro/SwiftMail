@@ -93,6 +93,15 @@ final class FetchMessageInfoHandler: BaseIMAPCommandHandler<[MessageInfo]>, IMAP
     }
 
     private func applyCollectedThreadingHeaders() {
+        // Kept apart from the parsed dictionaries, which collapse repeated fields. The lenient
+        // Latin-1 fallback means a block that isn't valid UTF-8 still reaches the caller.
+        let rawBlock = String(data: currentHeaderLiteral, encoding: .utf8)
+            ?? String(data: currentHeaderLiteral, encoding: .isoLatin1)
+        lock.withLock {
+            guard let index = currentMessageIndex() else { return }
+            self.messageInfos[index].rawHeaderFields = rawBlock
+        }
+
         guard let headerBlock = String(data: currentHeaderLiteral, encoding: .utf8) ?? String(
             data: currentHeaderLiteral,
             encoding: .ascii
